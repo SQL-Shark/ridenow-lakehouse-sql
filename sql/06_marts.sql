@@ -21,22 +21,7 @@ join dim_date d on f.pickup_date_key = d.date_key
 group by 1,2,3
 order by 1;
 
--- Card payments only (type 1). Cash tips aren't captured by the meter, and
--- type 0 -- flex fare tips, 7.8% of trips -- shows a tipping profile matching
--- neither (21% tipped, avg $0.94 vs 94.9% / $4.21 for card). Excluded.
--- Rate is sum(tips)/sum(fares), NOT avg of per-row ratios: the latter
--- over-weights cheap trips and answers a different question.
-create or replace view v_tip_rate_by_borough_hour as
-select
-    z.borough,
-    f.pickup_hour,
-    count(*)                                                          as card_trips,
-    round(100.0 * sum(f.tip_amount) / nullif(sum(f.fare_amount), 0), 2) as tip_rate_pct
-from fact_trip f
-join dim_zone z on f.pickup_zone_key = z.location_id
-where f.payment_type = 1
-group by 1,2
-order by 1,2;
+
 
 -- Top 10 O-D pairs per month.
 create or replace view v_top_od_pairs as
@@ -56,12 +41,62 @@ from (
 where rk <= 10
 order by source_month, trips desc;
 
--- Card vs cash share by month.
+
+
+
+
+create or replace view v_tip_rate_by_borough_hour as
+select
+    z.borough,
+    f.pickup_hour,
+    count(*)                                                     as trips,
+    -- How often: share of trips carrying any tip at all.
+    round(100.0 * count(*) filter (where f.tip_amount > 0)
+        / count(*), 1)                                           as tip_incidence_pct,
+    -- How much: tip as a share of fare, among trips that tipped.
+    round(100.0 * sum(f.tip_amount)  filter (where f.tip_amount > 0)
+        / nullif(sum(f.fare_amount)  filter (where f.tip_amount > 0), 0), 2)
+                                                                 as tip_rate_when_tipped_pct,
+    -- Retained for continuity with the naive metric. Do not report alone.
+    round(100.0 * sum(f.tip_amount) / nullif(sum(f.fare_amount), 0), 2)
+                                                                 as blended_tip_rate_pct
+from fact_trip f
+join dim_zone         z on f.pickup_zone_key   = z.location_id
+join dim_payment_type p on f.payment_type_key  = p.payment_type_key
+where p.records_tip
+  -- 'N/A' and 'Unknown' are real rows in the TLC zone lookup, so they pass
+  -- referential validation, but they are meaningless in a borough cut.
+  -- Excluded here at the mart, not in silver, so the rows stay available.
+  and z.borough not in ('N/A', 'Unknown')
+group by 1, 2
+-- Small groups produce nonsense rates: Staten Island had a 146% rate on two
+-- trips before this threshold. Suppress rather than caveat.
+having count(*) >= 100
+order by 1, 2;
+
+
+-- Payment mix by month, now with names instead of codes.
 create or replace view v_payment_share as
 select
-    source_month,
-    round(100.0 * count(*) filter (where payment_type = 1) / count(*), 2) as card_pct,
-    round(100.0 * count(*) filter (where payment_type = 2) / count(*), 2) as cash_pct,
-    round(100.0 * count(*) filter (where payment_type = 0) / count(*), 2) as flex_pct
-from fact_trip
-group by 1 order by 1;
+    f.source_month,
+    p.payment_type_name,
+    count(*)                                                  as trips,
+    round(100.0 * count(*) / sum(count(*)) over (partition by f.source_month), 2)
+                                                              as share_pct
+from fact_trip f
+join dim_payment_type p on f.payment_type_key = p.payment_type_key
+group by 1, 2
+order by 1, 4 desc;
+
+
+-- Volume by vendor. Small, but it surfaces the 798-trip third vendor that
+-- is invisible in every other aggregate.
+create or replace view v_vendor_share as
+select
+    v.vendor_name,
+    count(*)                                                  as trips,
+    round(100.0 * count(*) / sum(count(*)) over (), 4)        as share_pct
+from fact_trip f
+join dim_vendor v on f.vendor_key = v.vendor_key
+group by 1
+order by 2 desc;

@@ -40,3 +40,29 @@ select case when count(*) > 0 then 1/0 else 0 end as assert_date_fk
 from fact_trip f
 left join dim_date d on f.pickup_date_key = d.date_key
 where d.date_key is null;
+
+
+
+
+-- Referential integrity to the two new dimensions.
+-- Same anti-join pattern as the zone and date checks: any row in the fact
+-- whose key is absent from the dimension is a violation, and the 1/0
+-- forces a non-zero exit that run.ps1 propagates.
+
+select case when count(*) > 0 then 1/0 else 0 end as assert_payment_type_fk
+from fact_trip f
+left join dim_payment_type p on f.payment_type_key = p.payment_type_key
+where p.payment_type_key is null;
+
+select case when count(*) > 0 then 1/0 else 0 end as assert_vendor_fk
+from fact_trip f
+left join dim_vendor v on f.vendor_key = v.vendor_key
+where v.vendor_key is null;
+
+-- Dimension completeness. Cheap, and it catches a half-applied seed --
+-- the failure mode where the create ran but the insert did not.
+select case when count(*) <> 7 then 1/0 else 0 end as assert_dim_payment_type_seeded
+from dim_payment_type;
+
+select case when count(*) <> 4 then 1/0 else 0 end as assert_dim_vendor_seeded
+from dim_vendor;
