@@ -42,7 +42,7 @@ keyed as (
     from cleaned
 ),
 deduped as (
-    select * exclude (rn)
+    select * exclude (rn) -- drop the row_number column after filtering to the first row per trip_sk
     from (select *, row_number() over (partition by trip_sk order by pickup_datetime) as rn
           from keyed)
     where rn = 1
@@ -51,6 +51,7 @@ select d.*
 from deduped d
 inner join dim_zone pu on d.pickup_location_id  = pu.location_id
 inner join dim_zone dz on d.dropoff_location_id = dz.location_id;
+
 
 -- Rows failing referential integrity, retained for investigation.
 create or replace table quarantine_trips as

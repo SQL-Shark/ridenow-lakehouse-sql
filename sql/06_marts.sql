@@ -22,7 +22,7 @@ group by 1,2,3
 order by 1;
 
 -- Card payments only (type 1). Cash tips aren't captured by the meter, and
--- type 0 -- undocumented, 7.8% of trips -- shows a tipping profile matching
+-- type 0 -- flex fare tips, 7.8% of trips -- shows a tipping profile matching
 -- neither (21% tipped, avg $0.94 vs 94.9% / $4.21 for card). Excluded.
 -- Rate is sum(tips)/sum(fares), NOT avg of per-row ratios: the latter
 -- over-weights cheap trips and answers a different question.
@@ -62,6 +62,6 @@ select
     source_month,
     round(100.0 * count(*) filter (where payment_type = 1) / count(*), 2) as card_pct,
     round(100.0 * count(*) filter (where payment_type = 2) / count(*), 2) as cash_pct,
-    round(100.0 * count(*) filter (where payment_type = 0) / count(*), 2) as undocumented_pct
+    round(100.0 * count(*) filter (where payment_type = 0) / count(*), 2) as flex_pct
 from fact_trip
 group by 1 order by 1;
