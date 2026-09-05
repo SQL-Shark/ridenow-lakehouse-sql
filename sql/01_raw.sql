@@ -42,6 +42,15 @@ from read_parquet('data/raw/yellow_tripdata_*.parquet',
                   union_by_name = true,   -- tolerate column drift between months
                   filename      = true);
 
--- Fail fast if the lineage extraction silently returned nulls.
-select case when count(*) > 0 then 1/0 else 0 end as check_source_month_populated
-from raw_yellow_trips where source_month is null;
+-- Fail fast if the lineage extraction silently failed.
+--
+-- Two things to know here. regexp_extract returns an EMPTY STRING on no-match,
+-- not null, so `is null` alone would never fire. And error() is what aborts:
+-- 1/0 evaluates to inf in DuckDB and exits 0, so the obvious divide-by-zero
+-- trick passes silently. See sql/05_assertions.sql for the same pattern.
+select case when count(*) > 0
+            then error('01_raw: source_month blank on ' || count(*)
+                       || ' rows - filename lineage extraction failed')
+            else 'ok' end as check_source_month_populated
+from raw_yellow_trips
+where source_month is null or source_month = '';

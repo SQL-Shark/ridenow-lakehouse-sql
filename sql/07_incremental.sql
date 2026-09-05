@@ -24,9 +24,13 @@ select
 from read_parquet('data/raw/yellow_tripdata_' || getvariable('target_month') || '.parquet',
                   filename = true);
 
--- 2. Rebuild only that month's slice of silver and fact.
-delete from silver_trips where source_month = getvariable('target_month');
-delete from fact_trip    where source_month = getvariable('target_month');
+-- 2. Rebuild only that month's slice of silver, fact and quarantine.
+-- Quarantine is scoped and rebuilt alongside the others: leaving it untouched
+-- would let a month's quarantine rows survive a reload that no longer produces
+-- them, so the table would report referential failures that no longer exist.
+delete from silver_trips     where source_month = getvariable('target_month');
+delete from fact_trip        where source_month = getvariable('target_month');
+delete from quarantine_trips where source_month = getvariable('target_month');
 
 -- 3. Rebuild silver for the target month only, applying the same rules as 03.
 insert into silver_trips
@@ -62,10 +66,14 @@ deduped as (
           from keyed)
     where rn = 1
 )
+-- Same three referential joins as 03_silver, including dim_date. If these ever
+-- diverge from 03, an incrementally loaded month will differ from a fully
+-- rebuilt one, which is the subtle failure this design is most exposed to.
 select d.*
 from deduped d
 inner join dim_zone pu on d.pickup_location_id  = pu.location_id
-inner join dim_zone dz on d.dropoff_location_id = dz.location_id;
+inner join dim_zone dz on d.dropoff_location_id = dz.location_id
+inner join dim_date dd on d.pickup_date         = dd.date_key;
 
 -- 4. Project the new silver rows into the fact table.
 insert into fact_trip
@@ -86,5 +94,20 @@ select
     total_amount
 from silver_trips
 where source_month = getvariable('target_month');
+
+-- 5. Re-quarantine this month's unresolvable references, matching 03_silver's
+-- definition. Built from raw so it measures the source, not the survivors.
+insert into quarantine_trips
+select
+    r.*,
+    case when pu.location_id is null then 'unknown_pickup_zone'          end,
+    case when dz.location_id is null then 'unknown_dropoff_zone'         end,
+    case when dd.date_key    is null then 'pickup_date_outside_calendar' end
+from raw_yellow_trips r
+left join dim_zone pu on r.pickup_location_id  = pu.location_id
+left join dim_zone dz on r.dropoff_location_id = dz.location_id
+left join dim_date dd on cast(r.pickup_datetime as date) = dd.date_key
+where r.source_month = getvariable('target_month')
+  and (pu.location_id is null or dz.location_id is null or dd.date_key is null);
 
 commit;

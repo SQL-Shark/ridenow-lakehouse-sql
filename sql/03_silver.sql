@@ -47,19 +47,36 @@ deduped as (
           from keyed)
     where rn = 1
 )
+-- Referential integrity is enforced by the join, not asserted afterwards: a row
+-- that cannot resolve every foreign key never reaches silver in the first place.
+--
+-- dim_date is joined for the same reason as dim_zone. A handful of source rows
+-- carry junk pickup timestamps (2002, 2008, 2009 in the 2024 files) that pass
+-- every cleaning rule above -- a 2002 trip can still have a positive fare and a
+-- plausible duration -- and would otherwise land in the fact with no matching
+-- calendar row. v_daily_metrics inner-joins dim_date, so they would silently
+-- vanish from daily reporting while still inflating fact_trip's row count.
 select d.*
 from deduped d
 inner join dim_zone pu on d.pickup_location_id  = pu.location_id
-inner join dim_zone dz on d.dropoff_location_id = dz.location_id;
+inner join dim_zone dz on d.dropoff_location_id = dz.location_id
+inner join dim_date dd on d.pickup_date         = dd.date_key;
 
 
 -- Rows failing referential integrity, retained for investigation.
+-- Built from raw rather than from `cleaned`, so this measures the true volume of
+-- unresolvable references in the source regardless of what the cleaning rules
+-- would also have removed.
 create or replace table quarantine_trips as
 select
     r.*,
-    case when pu.location_id is null then 'unknown_pickup_zone'  end as pickup_issue,
-    case when dz.location_id is null then 'unknown_dropoff_zone' end as dropoff_issue
+    case when pu.location_id is null then 'unknown_pickup_zone'          end as pickup_issue,
+    case when dz.location_id is null then 'unknown_dropoff_zone'         end as dropoff_issue,
+    case when dd.date_key    is null then 'pickup_date_outside_calendar' end as date_issue
 from raw_yellow_trips r
 left join dim_zone pu on r.pickup_location_id  = pu.location_id
 left join dim_zone dz on r.dropoff_location_id = dz.location_id
-where pu.location_id is null or dz.location_id is null;
+left join dim_date dd on cast(r.pickup_datetime as date) = dd.date_key
+where pu.location_id is null
+   or dz.location_id is null
+   or dd.date_key    is null;
